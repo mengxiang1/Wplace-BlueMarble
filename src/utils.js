@@ -127,6 +127,20 @@ export function base64ToUint8(base64) {
   return array;
 }
 
+/**
+ * Converts a Blob or File object into a Base64 encoded data URL string.
+ * @param {Blob} blob - The Blob or File to convert.
+ * @returns {Promise<string>} A promise that resolves with the data URL string.
+ */
+export function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
 /** The color palette used by wplace.live
  * @since 0.78.0
  * @examples

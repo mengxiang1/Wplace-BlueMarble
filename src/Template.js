@@ -38,6 +38,7 @@ export default class Template {
     this.coords = coords;
     this.chunked = chunked;
     this.tileSize = tileSize;
+    this.rawPixelData = null;
     this.pixelCount = 0; // Total pixel count in template
   }
 
@@ -53,12 +54,18 @@ export default class Template {
     const bitmap = await createImageBitmap(this.file); // Create efficient bitmap from uploaded file
     const imageWidth = bitmap.width;
     const imageHeight = bitmap.height;
-    
+
+    const rawCanvas = new OffscreenCanvas(imageWidth, imageHeight);
+    const rawCtx = rawCanvas.getContext('2d', { willReadFrequently: true });
+    rawCtx.drawImage(bitmap, 0, 0);
+    this.rawPixelData = rawCtx.getImageData(0, 0, imageWidth, imageHeight);
+    console.log("Extracted raw pixel data from template.", this.rawPixelData);
+
     // Calculate total pixel count using standard width × height formula
     // TODO: Use non-transparent pixels instead of basic width times height
     const totalPixels = imageWidth * imageHeight;
     console.log(`Template pixel analysis - Dimensions: ${imageWidth}×${imageHeight} = ${totalPixels.toLocaleString()} pixels`);
-    
+
     // Store pixel count in instance property for access by template manager and UI components
     this.pixelCount = totalPixels;
 
@@ -69,7 +76,7 @@ export default class Template {
     const context = canvas.getContext('2d', { willReadFrequently: true });
 
     // For every tile...
-    for (let pixelY = this.coords[3]; pixelY < imageHeight + this.coords[3]; ) {
+    for (let pixelY = this.coords[3]; pixelY < imageHeight + this.coords[3];) {
 
       // Draws the partial tile first, if any
       // This calculates the size based on which is smaller:
@@ -158,13 +165,13 @@ export default class Template {
         const templateTileName = `${(this.coords[0] + Math.floor(pixelX / 1000))
           .toString()
           .padStart(4, '0')},${(this.coords[1] + Math.floor(pixelY / 1000))
-          .toString()
-          .padStart(4, '0')},${(pixelX % 1000)
-          .toString()
-          .padStart(3, '0')},${(pixelY % 1000).toString().padStart(3, '0')}`;
+            .toString()
+            .padStart(4, '0')},${(pixelX % 1000)
+              .toString()
+              .padStart(3, '0')},${(pixelY % 1000).toString().padStart(3, '0')}`;
 
         templateTiles[templateTileName] = await createImageBitmap(canvas); // Creates the bitmap
-        
+
         const canvasBlob = await canvas.convertToBlob();
         const canvasBuffer = await canvasBlob.arrayBuffer();
         const canvasBufferBytes = Array.from(new Uint8Array(canvasBuffer));
