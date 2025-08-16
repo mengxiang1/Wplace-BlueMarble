@@ -404,7 +404,9 @@ export default class TemplateManager {
  * @param {number} tileX - The X coordinate of the tile to analyze.
  * @param {number} tileY - The Y coordinate of the tile to analyze.
  */
-  async initAutoPlacerForTile(tileX, tileY) {
+// src-new/templateManager.js -> In the TemplateManager class
+
+  async initAutoPlacerForTile(tileX, tileY) { // <-- RENAMED
     this.overlay.handleDisplayStatus("Analyzing tile (1:1)...");
 
     const tileKey = `${tileX.toString().padStart(4, '0')},${tileY.toString().padStart(4, '0')}`;
@@ -415,14 +417,14 @@ export default class TemplateManager {
       return;
     }
 
-    const template = this.templatesArray[0]; // Assuming one active template
+    const template = this.templatesArray[0];
     if (!template || !template.rawPixelData) {
       this.overlay.handleDisplayError("No active template or raw pixel data found.");
       return;
     }
 
     try {
-      // Step 1: Get the pixel data for the original 1000x1000 tile
+      // Step 1 & 2: Get pixel data and generate the initial queue of differences (unchanged)
       const originalBitmap = await createImageBitmap(originalTileBlob);
       const originalCanvas = new OffscreenCanvas(originalBitmap.width, originalBitmap.height);
       const originalCtx = originalCanvas.getContext('2d', { willReadFrequently: true });
@@ -433,30 +435,20 @@ export default class TemplateManager {
       const templateWidth = templateData.width;
       const templateHeight = templateData.height;
 
-      // Top-left starting coordinates of the template, relative to the tile system
       const templateStartTileX = template.coords[0];
       const templateStartTileY = template.coords[1];
       const templateStartPixelX = template.coords[2];
       const templateStartPixelY = template.coords[3];
+      
+      let pixelQueue = [];
 
-      const pixelQueue = [];
-
-      // Step 2: Loop through every pixel OF THE TEMPLATE
       for (let y = 0; y < templateHeight; y++) {
         for (let x = 0; x < templateWidth; x++) {
-
           const templateIndex = (y * templateWidth + x) * 4;
+          if (templateData.data[templateIndex + 3] < 250) continue;
 
-          // If the template pixel is transparent, it's not part of the design, so we skip it.
-          if (templateData.data[templateIndex + 3] < 250) {
-            continue;
-          }
-
-          // Step 3: Calculate the absolute world coordinates of this template pixel
           const absolutePixelX = (templateStartTileX * this.tileSize) + templateStartPixelX + x;
           const absolutePixelY = (templateStartTileY * this.tileSize) + templateStartPixelY + y;
-
-          // Step 4: Check if this absolute coordinate falls within the current tile we're analyzing
           const currentTileStartX = tileX * this.tileSize;
           const currentTileStartY = tileY * this.tileSize;
 
@@ -464,33 +456,28 @@ export default class TemplateManager {
             absolutePixelX >= currentTileStartX && absolutePixelX < (currentTileStartX + this.tileSize) &&
             absolutePixelY >= currentTileStartY && absolutePixelY < (currentTileStartY + this.tileSize)
           ) {
-            // This pixel IS on the current tile. Now we compare it.
             const pixelXOnTile = absolutePixelX % this.tileSize;
             const pixelYOnTile = absolutePixelY % this.tileSize;
-
             const originalIndex = (pixelYOnTile * this.tileSize + pixelXOnTile) * 4;
 
-            // Step 5: Compare the colors.
             const templateR = templateData.data[templateIndex];
             const templateG = templateData.data[templateIndex + 1];
             const templateB = templateData.data[templateIndex + 2];
-
             const originalR = originalImageData[originalIndex];
             const originalG = originalImageData[originalIndex + 1];
             const originalB = originalImageData[originalIndex + 2];
             const originalA = originalImageData[originalIndex + 3];
 
-            // If the original pixel is transparent (alpha=0), it definitely needs placing.
-            // OR if the colors don't match.
             if (originalA < 250 || templateR !== originalR || templateG !== originalG || templateB !== originalB) {
-              // Colors are different! Add to queue.
               const rgbKey = `${templateR},${templateG},${templateB}`;
               const colorIndex = this.colorRGBLookup.get(rgbKey);
-
               if (colorIndex !== undefined) {
+                // We still need the template-relative coordinates for sorting
                 pixelQueue.push({
                   pixelX: pixelXOnTile,
                   pixelY: pixelYOnTile,
+                  templateX: x,
+                  templateY: y,
                   colorIndex: colorIndex
                 });
               }
@@ -499,11 +486,61 @@ export default class TemplateManager {
         }
       }
 
+      // --- NEW FEATURE: Sort the queue in a rectangular spiral (outside-in) ---
+      if (pixelQueue.length > 1) {
+          console.log(`Sorting queue of ${pixelQueue.length} pixels into rectangular spiral order...`);
+          
+          const sortedQueue = [];
+          
+          // Create a 2D grid representation of the pixels that need to be placed
+          const pixelMap = new Map();
+          pixelQueue.forEach(p => {
+              if (!pixelMap.has(p.templateY)) pixelMap.set(p.templateY, new Map());
+              pixelMap.get(p.templateY).set(p.templateX, p);
+          });
+
+          // Define the boundaries of the template
+          let top = 0, bottom = templateHeight - 1;
+          let left = 0, right = templateWidth - 1;
+          
+          while (top <= bottom && left <= right) {
+              // 1. Traverse from left to right along the top row
+              for (let i = left; i <= right; i++) {
+                  if (pixelMap.get(top)?.has(i)) sortedQueue.push(pixelMap.get(top).get(i));
+              }
+              top++;
+
+              // 2. Traverse from top to bottom along the right column
+              for (let i = top; i <= bottom; i++) {
+                  if (pixelMap.get(i)?.has(right)) sortedQueue.push(pixelMap.get(i).get(right));
+              }
+              right--;
+
+              if (top <= bottom) {
+                  // 3. Traverse from right to left along the bottom row
+                  for (let i = right; i >= left; i--) {
+                      if (pixelMap.get(bottom)?.has(i)) sortedQueue.push(pixelMap.get(bottom).get(i));
+                  }
+                  bottom--;
+              }
+
+              if (left <= right) {
+                  // 4. Traverse from bottom to top along the left column
+                  for (let i = bottom; i >= top; i--) {
+                      if (pixelMap.get(i)?.has(left)) sortedQueue.push(pixelMap.get(i).get(left));
+                  }
+                  left++;
+              }
+          }
+          pixelQueue = sortedQueue;
+      }
+      // --- END OF NEW FEATURE ---
+
+      // Finalize the queue
       unsafeWindow.blueMarblePixelQueue = pixelQueue;
       const charges = this.overlay.apiManager.availableCharges;
       unsafeWindow.blueMarbleAvailableCharges = charges;
-
-      const message = `Initialized with ${pixelQueue.length} pixels. Charges: ${charges}. Click 'Paint' on the UI to place a batch.`;
+      const message = `Initialized with ${pixelQueue.length} pixels (rect-spiral order). Charges: ${charges.toFixed(1)}. Click 'Paint' to place.`; // <-- RENAMED
       this.overlay.handleDisplayStatus(message);
       console.log(message, unsafeWindow.blueMarblePixelQueue);
 
@@ -512,7 +549,6 @@ export default class TemplateManager {
       console.error("Error during 1:1 pixel analysis:", error);
     }
   }
-
   /** Parses the OSU! Place JSON object
    */
   #parseOSU() {
